@@ -40,7 +40,7 @@ def evaluate_model(model, dataloader, device):
     # compute and return metrics
     return dev_accuracy.compute()
 
-def train(mymodel, train_dataloader, validation_dataloader, lr, num_epochs, device):
+def train(mymodel, model_name, save_path, train_dataloader, validation_dataloader, lr, num_epochs, device):
     mymodel.to(device)
     # here, we use the AdamW optimizer. Use torch.optim.Adam.
     # instantiate it on the untrained model parameters with a learning rate of 5e-5
@@ -122,6 +122,10 @@ def train(mymodel, train_dataloader, validation_dataloader, lr, num_epochs, devi
         epoch_end_time = time.time()
         #print("Epoch {epoch + 1} took {epoch_end_time - epoch_start_time} seconds")
         print("Epoch "+str(epoch + 1)+" took "+str(epoch_end_time - epoch_start_time)+" seconds")
+    ## Save model and push to HF hub
+    torch.save(mymodel.state_dict(), save_path)
+    mymodel.push_to_hub(model_name)
+    tokenizer.push_to_hub(model_name)
     return train_acc_list, dev_acc_list, epoch_list
 
 def tokenization(example):
@@ -143,15 +147,22 @@ if __name__=="__main__":
     # Dataset
     
     dataset = load_dataset("stanfordnlp/sst2")
-    train_data, validation_data, test_data = load_dataset("stanfordnlp/sst2", split =['train', 'validation', 'test'])
+    train_data, test_data = load_dataset("stanfordnlp/sst2", split =['train', 'validation'])
+    train_val_splitdata = train_data.train_test_split(test_size=0.1)
+    train_data = train_val_splitdata['train']
+    validation_data = train_val_splitdata['test']
 
     model = RobertaForSequenceClassification.from_pretrained('roberta-base')
     tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base', max_length = 512, return_tensors="pt")
-    print("model labels", model.num_labels)
 
     ## Small dataset for testing
-    splitted_train_data = train_data.train_test_split(test_size=0.05)
+    splitted_train_data = train_data.train_test_split(test_size=0.005)
     small_data = splitted_train_data['test']
+
+    # Data size using
+    data_size = "small" #full or small
+    if data_size == "small":
+        train_data = small_data
     
     # Tokenize the entire dataset
     train_data = train_data.map(tokenization, batched = True, batch_size = len(train_data))
@@ -168,10 +179,34 @@ if __name__=="__main__":
     train_dataloader = DataLoader(train_data, shuffle=True, batch_size=32, collate_fn=data_collator)
     validation_dataloader = DataLoader(validation_data, shuffle=True, batch_size=32, collate_fn=data_collator)
     test_dataloader = DataLoader(test_data, shuffle=True, batch_size=32, collate_fn=data_collator)
-                  
+
+
+    # Set training parameters
+    training_type="LORA" #LORA, full
+    lr=0.00001
+    num_epochs=20
+    model_name="adv-ssm-hw1-"+training_type+"Para-"+data_size+"Data-"+str(round(time.time()))
+    save_path='/home/cs601-pwang71/adv-ssm-hw1/saved_models/'+model_name+'.pt'
+    # Log Training Info
+    print("Training info:")
+    print("Training type:", training_type, "Learning rate:", lr, "Num Epochs:", num_epochs, "Data Size:", data_size)
+    print("Model Name:", model_name, "Save Path:", save_path)
+
+    # PeFT
+    if training_type=="LORA":
+        config = LoraConfig(
+            r=16,
+            lora_alpha=16,
+            target_modules=["query", "value"],
+            lora_dropout=0.1,
+            bias="none",
+            modules_to_save=["classifier"],
+        )
+        model = get_peft_model(model, config)
+        model.print_trainable_parameters()
     # Train
 
-    train_acc_list, dev_acc_list, epoch_list = train(mymodel=model, train_dataloader=train_dataloader, validation_dataloader=validation_dataloader, lr=0.00001, num_epochs=20, device=device)#0.0001
+    train_acc_list, dev_acc_list, epoch_list = train(mymodel=model, model_name=model_name, save_path=save_path, train_dataloader=train_dataloader, validation_dataloader=validation_dataloader, lr=lr, num_epochs=num_epochs, device=device)#0.00001
 
 
     
