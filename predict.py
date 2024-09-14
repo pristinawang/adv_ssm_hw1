@@ -68,9 +68,9 @@ if __name__=="__main__":
 
 #     # Load model directly
 # from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
-    tokenizer = AutoTokenizer.from_pretrained("pristinawang/adv-ssm-hw1-fullPara-fullData-1726281318")
-    model = AutoModelForSequenceClassification.from_pretrained("pristinawang/adv-ssm-hw1-fullPara-fullData-1726281318")
+    model_id = "pristinawang/adv-ssm-hw1-bitfitPara-smallData-1726341791"
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModelForSequenceClassification.from_pretrained(model_id)
 
 
     ## Small dataset for testing

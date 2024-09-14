@@ -1,5 +1,7 @@
 from datasets import load_dataset
 from transformers import RobertaForSequenceClassification, RobertaTokenizerFast
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+from peft import LoraConfig, get_peft_model
 from torch.utils.data import DataLoader, Subset
 import evaluate as evaluate
 from tqdm import tqdm
@@ -40,12 +42,25 @@ def evaluate_model(model, dataloader, device):
     # compute and return metrics
     return dev_accuracy.compute()
 
-def train(mymodel, model_name, save_path, train_dataloader, validation_dataloader, lr, num_epochs, device):
+def train(mymodel, training_type, model_name, save_path, train_dataloader, validation_dataloader, lr, num_epochs, device):
     mymodel.to(device)
     # here, we use the AdamW optimizer. Use torch.optim.Adam.
     # instantiate it on the untrained model parameters with a learning rate of 5e-5
     print(" >>>>>>>>  Initializing optimizer")
-    optimizer = torch.optim.AdamW(mymodel.parameters(), lr=lr)
+    if training_type=="bitfit":
+        
+        bias_params = []
+        
+        for name, param in mymodel.named_parameters():
+            if not "embeddings" in name and "bias" in name:  
+                bias_params.append(param)
+        
+        para=bias_params
+        #mymodel.classifier.parameters()
+    # Full parameter tuning
+    else:
+        para=mymodel.parameters()
+    optimizer = torch.optim.AdamW(para, lr=lr)
 
     # now, we set up the learning rate scheduler
     lr_scheduler = get_scheduler(
@@ -122,10 +137,12 @@ def train(mymodel, model_name, save_path, train_dataloader, validation_dataloade
         epoch_end_time = time.time()
         #print("Epoch {epoch + 1} took {epoch_end_time - epoch_start_time} seconds")
         print("Epoch "+str(epoch + 1)+" took "+str(epoch_end_time - epoch_start_time)+" seconds")
+    
     ## Save model and push to HF hub
-    torch.save(mymodel.state_dict(), save_path)
-    mymodel.push_to_hub(model_name)
-    tokenizer.push_to_hub(model_name)
+    if val_accuracy['accuracy'] > 0.8:
+        torch.save(mymodel.state_dict(), save_path)
+        mymodel.push_to_hub(model_name)
+        tokenizer.push_to_hub(model_name)
     return train_acc_list, dev_acc_list, epoch_list
 
 def tokenization(example):
@@ -152,11 +169,18 @@ if __name__=="__main__":
     train_data = train_val_splitdata['train']
     validation_data = train_val_splitdata['test']
 
+    
     model = RobertaForSequenceClassification.from_pretrained('roberta-base')
     tokenizer = RobertaTokenizerFast.from_pretrained('roberta-base', max_length = 512, return_tensors="pt")
 
-    ## Small dataset for testing
-    splitted_train_data = train_data.train_test_split(test_size=0.005)
+    # for name, param in model.named_parameters():
+    # #   print(name, param.shape)
+    #     if not "embeddings" in name and "bias" in name:
+    #         print(name, param.shape)
+    # #   print(param)
+    
+    # Small dataset for testing
+    splitted_train_data = train_data.train_test_split(test_size=0.01)
     small_data = splitted_train_data['test']
 
     # Data size using
@@ -182,18 +206,15 @@ if __name__=="__main__":
 
 
     # Set training parameters
-    training_type="LORA" #LORA, full
-    lr=0.00001
-    num_epochs=20
+    training_type="bitfit" #LORA, full, bitfit
+    num_epochs=10
     model_name="adv-ssm-hw1-"+training_type+"Para-"+data_size+"Data-"+str(round(time.time()))
     save_path='/home/cs601-pwang71/adv-ssm-hw1/saved_models/'+model_name+'.pt'
-    # Log Training Info
-    print("Training info:")
-    print("Training type:", training_type, "Learning rate:", lr, "Num Epochs:", num_epochs, "Data Size:", data_size)
-    print("Model Name:", model_name, "Save Path:", save_path)
+    
 
     # PeFT
     if training_type=="LORA":
+        lr=0.001
         config = LoraConfig(
             r=16,
             lora_alpha=16,
@@ -204,9 +225,18 @@ if __name__=="__main__":
         )
         model = get_peft_model(model, config)
         model.print_trainable_parameters()
+    elif training_type=="full":
+        lr=0.00001
+    elif training_type=="bitfit":
+        lr=0.003
+    # Log Training Info
+    print("Training info:")
+    print("Training type:", training_type, "Learning rate:", lr, "Num Epochs:", num_epochs, "Data Size:", data_size)
+    print("Model Name:", model_name, "Save Path:", save_path)
+
     # Train
 
-    train_acc_list, dev_acc_list, epoch_list = train(mymodel=model, model_name=model_name, save_path=save_path, train_dataloader=train_dataloader, validation_dataloader=validation_dataloader, lr=lr, num_epochs=num_epochs, device=device)#0.00001
+    train_acc_list, dev_acc_list, epoch_list = train(mymodel=model, training_type=training_type, model_name=model_name, save_path=save_path, train_dataloader=train_dataloader, validation_dataloader=validation_dataloader, lr=lr, num_epochs=num_epochs, device=device)#0.00001
 
 
     
